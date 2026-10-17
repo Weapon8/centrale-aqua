@@ -1,0 +1,708 @@
+<!doctype html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#081018">
+<title>Centrale Aqua</title>
+<!--
+  Centrale Aqua 1.0.0 : page de suivi des températures des bacs, par weapon666.
+  Deux sources :
+    - le relais Cloudflare (la carte y envoie ses mesures toutes les 2 min),
+      lisible de partout, avec les courbes sur 48 h ;
+    - le Bluetooth, en direct quand tu es à côté des bacs (Chrome Android ou PC).
+-->
+<style>
+  :root {
+    --fond: #081018;
+    --carte: #101c27;
+    --carte-2: #152433;
+    --trait: #22384a;
+    --texte: #e9f1f6;
+    --doux: #8ea2b2;
+    --tres-doux: #5d7183;
+    --accent: #6ecde1;
+    --vert: #46d278;
+    --orange: #ffaa32;
+    --rouge: #ff5046;
+    --fond-alarme: #4a1414;
+    --bord-alarme: #ff5046;
+    --z0: #ff8f7e;
+    --z1: #6ecde1;
+    --z2: #5fdc8c;
+    --z3: #9aa7b3;
+    color-scheme: dark;
+  }
+  @media (prefers-color-scheme: light) {
+    :root:not([data-theme="dark"]) {
+      --fond: #eef3f6;
+      --carte: #ffffff;
+      --carte-2: #f4f8fa;
+      --trait: #d5e0e7;
+      --texte: #0f1d28;
+      --doux: #52687a;
+      --tres-doux: #8597a5;
+      --accent: #127d93;
+      --vert: #13894a;
+      --orange: #b86a00;
+      --rouge: #d02a20;
+      --fond-alarme: #fde7e5;
+      --bord-alarme: #d02a20;
+      --z0: #d4543f;
+      --z1: #1487a0;
+      --z2: #1d9a52;
+      --z3: #6c7a86;
+      color-scheme: light;
+    }
+  }
+  :root[data-theme="light"] { color-scheme: light; }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--fond);
+    color: var(--texte);
+    font: 16px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    -webkit-tap-highlight-color: transparent;
+  }
+  main {
+    max-width: 720px;
+    margin: 0 auto;
+    padding: max(16px, env(safe-area-inset-top)) 16px max(28px, env(safe-area-inset-bottom));
+  }
+
+  header { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 14px; }
+  h1 { font-size: 1.35rem; margin: 0; letter-spacing: .01em; }
+  h1 span { color: var(--accent); }
+  .pastille {
+    display: inline-flex; align-items: center; gap: 7px;
+    font-size: .82rem; color: var(--doux);
+    background: var(--carte); border: 1px solid var(--trait);
+    padding: 5px 11px; border-radius: 999px; white-space: nowrap;
+  }
+  .pastille i { width: 8px; height: 8px; border-radius: 50%; background: var(--tres-doux); display: inline-block; }
+  .pastille.ok i { background: var(--vert); }
+  .pastille.attention i { background: var(--orange); }
+  .pastille.erreur i { background: var(--rouge); }
+  .pastille.ble i { background: var(--accent); box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 25%, transparent); }
+
+  .bandeau {
+    border-radius: 12px; padding: 11px 14px; margin-bottom: 12px; font-size: .92rem;
+    background: color-mix(in srgb, var(--orange) 14%, var(--carte));
+    border: 1px solid color-mix(in srgb, var(--orange) 45%, transparent);
+  }
+  .bandeau.rouge {
+    background: color-mix(in srgb, var(--rouge) 14%, var(--carte));
+    border-color: color-mix(in srgb, var(--rouge) 45%, transparent);
+  }
+  .cache { display: none !important; }
+
+  .bacs { display: grid; gap: 10px; }
+  .bac {
+    position: relative;
+    background: var(--carte); border: 1px solid var(--trait); border-radius: 14px;
+    padding: 12px 14px 12px 18px;
+    display: grid; grid-template-columns: 1fr auto; align-items: center; gap: 2px 12px;
+    overflow: hidden;
+  }
+  .bac::before {
+    content: ""; position: absolute; left: 0; top: 0; bottom: 0; width: 5px; background: var(--c);
+  }
+  .bac .nom { font-weight: 650; font-size: 1.02rem; }
+  .bac .sous { font-size: .84rem; color: var(--doux); font-variant-numeric: tabular-nums; }
+  .bac .temp {
+    grid-row: 1 / span 2; grid-column: 2;
+    font-size: 2.35rem; font-weight: 700; letter-spacing: -.02em; font-variant-numeric: tabular-nums; line-height: 1;
+  }
+  .bac .temp small { font-size: .95rem; font-weight: 600; color: var(--doux); margin-left: 2px; vertical-align: .9em; }
+  .bac .temp.vide { color: var(--tres-doux); }
+  .bac.alarme { background: var(--fond-alarme); border-color: var(--bord-alarme); }
+  .bac.alarme .sous { color: var(--texte); font-weight: 600; }
+  .bac.inactif { opacity: .55; }
+  .puce { display: inline-block; font-size: .72rem; font-weight: 600; padding: 1px 7px; border-radius: 999px; margin-left: 6px; vertical-align: 1px; }
+  .puce.coupe { background: color-mix(in srgb, var(--orange) 22%, transparent); color: var(--orange); }
+
+  .air {
+    display: flex; justify-content: space-between; align-items: center;
+    background: var(--carte-2); border: 1px solid var(--trait); border-radius: 14px;
+    padding: 10px 16px; font-size: .95rem; color: var(--doux);
+  }
+  .air b { color: var(--texte); font-size: 1.15rem; font-variant-numeric: tabular-nums; }
+
+  section.graphe {
+    margin-top: 14px; background: var(--carte); border: 1px solid var(--trait); border-radius: 14px; padding: 12px 12px 10px;
+  }
+  .graphe-tete { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: 0 2px 6px; }
+  .graphe-tete h2 { font-size: .98rem; margin: 0; }
+  .plages { display: inline-flex; border: 1px solid var(--trait); border-radius: 9px; overflow: hidden; }
+  .plages button {
+    font: inherit; font-size: .82rem; background: none; color: var(--doux); border: 0; padding: 6px 11px; cursor: pointer;
+    min-height: 32px;
+  }
+  .plages button[aria-pressed="true"] { background: var(--carte-2); color: var(--texte); font-weight: 650; }
+  .legende { display: flex; flex-wrap: wrap; gap: 4px 14px; font-size: .8rem; color: var(--doux); margin: 4px 2px 0; }
+  .legende span::before { content: ""; display: inline-block; width: 12px; height: 3px; border-radius: 2px; background: var(--c); margin-right: 6px; vertical-align: 3px; }
+  #svg { width: 100%; height: 230px; display: block; touch-action: pan-y; }
+  #svg text { fill: var(--tres-doux); font-size: 11px; font-variant-numeric: tabular-nums; }
+  .info-pointeur {
+    min-height: 1.4em; font-size: .82rem; color: var(--doux); margin: 4px 2px 0; font-variant-numeric: tabular-nums;
+  }
+  .vide-graphe { color: var(--tres-doux); font-size: .9rem; padding: 40px 0; text-align: center; }
+
+  section.direct {
+    margin-top: 14px; background: var(--carte); border: 1px solid var(--trait); border-radius: 14px; padding: 14px;
+  }
+  .direct h2 { font-size: .98rem; margin: 0 0 4px; }
+  .direct p { margin: 0 0 10px; font-size: .86rem; color: var(--doux); }
+  .boutons { display: flex; flex-wrap: wrap; gap: 8px; }
+  button.action {
+    font: inherit; font-size: .92rem; font-weight: 600; cursor: pointer;
+    background: var(--accent); color: #04131a; border: 0; border-radius: 10px; padding: 10px 16px; min-height: 44px;
+  }
+  button.action.secondaire { background: var(--carte-2); color: var(--texte); border: 1px solid var(--trait); }
+  button.action.danger { background: var(--orange); color: #1d1200; }
+  button.action:disabled { opacity: .45; cursor: default; }
+
+  footer { margin-top: 18px; text-align: center; font-size: .76rem; color: var(--tres-doux); }
+  footer a { color: inherit; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>Centrale <span>Aqua</span></h1>
+    <span id="pastille" class="pastille"><i></i><span id="pastilleTexte">chargement…</span></span>
+  </header>
+
+  <div id="bandeau" class="bandeau cache"></div>
+
+  <div id="bacs" class="bacs" aria-live="polite"></div>
+  <div id="air" class="air cache" style="margin-top:10px"></div>
+
+  <section class="graphe">
+    <div class="graphe-tete">
+      <h2>Courbes</h2>
+      <div class="plages" role="group" aria-label="Durée affichée">
+        <button type="button" data-h="6">6 h</button>
+        <button type="button" data-h="24" aria-pressed="true">24 h</button>
+        <button type="button" data-h="48">48 h</button>
+      </div>
+    </div>
+    <svg id="svg" role="img" aria-label="Courbes de température des bacs"></svg>
+    <div id="infoPointeur" class="info-pointeur"></div>
+    <div id="legende" class="legende"></div>
+  </section>
+
+  <section class="direct">
+    <h2>En direct par Bluetooth</h2>
+    <p id="bleTexte">Quand tu es à côté des bacs : lecture directe sur la carte, même sans internet.</p>
+    <div class="boutons">
+      <button id="bleBouton" class="action" type="button">Connexion directe</button>
+      <button id="silenceBouton" class="action danger cache" type="button">Couper le son de l'alarme</button>
+    </div>
+  </section>
+
+  <footer>Centrale Aqua 1.0.0 · <span id="versionCarte"></span></footer>
+</main>
+
+<script>
+"use strict";
+
+// ============================================================================
+//  RÉGLAGES
+// ============================================================================
+// Adresse du relais Cloudflare (sans / à la fin)
+const RELAIS = "https://centrale-aqua.dreamcana-cv.workers.dev";
+const RAFRAICHIR_S = 60;
+
+// Bluetooth : doit correspondre à CentraleAqua.ino
+const BLE_NOM = "CentraleAqua";
+const BLE_SERVICE  = "8f3c2a10-6b1d-4e7a-9c55-2d9e1a7b4c01";
+const BLE_MESURES  = "8f3c2a11-6b1d-4e7a-9c55-2d9e1a7b4c01";
+const BLE_INFOS    = "8f3c2a12-6b1d-4e7a-9c55-2d9e1a7b4c01";
+const BLE_COMMANDE = "8f3c2a13-6b1d-4e7a-9c55-2d9e1a7b4c01";
+
+const TEXTE_ALARME = { sonde: "Sonde débranchée ?", froid: "Trop froid", chaud: "Trop chaud", chute: "Chute rapide" };
+const BITS_ALARME = [["froid", 1], ["chaud", 2], ["chute", 4], ["sonde", 8]];
+const NB_BACS = 3;   // les zones suivantes (l'air) vont dans la barre du bas
+
+// ============================================================================
+//  ÉTAT
+// ============================================================================
+let relais = null;          // dernière réponse du relais
+let relaisErreur = null;    // texte d'erreur si le relais ne répond pas
+let relaisRecu = 0;         // Date.now() de la dernière réponse
+let ble = null;             // { appareil, commande, infos, mesure, recu }
+let plageH = 24;
+
+const $ = (id) => document.getElementById(id);
+
+function degres(t, signe) {
+  if (t === null || t === undefined || Number.isNaN(t)) return "--,-";
+  const s = signe && t > 0.049 ? "+" : "";
+  return s + t.toFixed(1).replace(".", ",").replace("-0,0", "0,0");
+}
+
+function depuis(secondes) {
+  if (secondes < 90) return "à l'instant";
+  const min = Math.round(secondes / 60);
+  if (min < 60) return `il y a ${min} min`;
+  const h = Math.floor(min / 60), m = min % 60;
+  return `il y a ${h} h${m ? String(m).padStart(2, "0") : ""}`;
+}
+
+function heure(ts) {
+  return new Date(ts * 1000).toLocaleTimeString("fr-FR", { hour: "2-digit", minute: "2-digit" });
+}
+
+function couleurZone(i) {
+  return `var(--z${Math.min(i, 3)})`;
+}
+
+// ============================================================================
+//  CE QU'ON AFFICHE : fusion relais + Bluetooth
+// ============================================================================
+// Bluetooth récent = prioritaire pour les valeurs en cours
+function zonesAffichees() {
+  if (ble && ble.mesure && Date.now() - ble.recu < 15000) {
+    const noms = ble.infos?.noms || [];
+    return ble.mesure.zones.map((z, i) => ({ ...z, nom: noms[i] || relais?.zones?.[i]?.nom || `Zone ${i + 1}` }));
+  }
+  return relais?.zones || null;
+}
+
+// Mini/maxi 24 h et variation sur 1 h, calculés sur l'historique du relais
+function statsZone(i) {
+  const pts = relais?.histo?.points;
+  if (!pts || !pts.length) return {};
+  const fin = pts[pts.length - 1][0];
+  let mn = null, mx = null, ref = null, refAge = 0;
+  for (const p of pts) {
+    const v = p[i + 1];
+    if (v === null || v === undefined) continue;
+    if (p[0] >= fin - 24 * 3600) {
+      if (mn === null || v < mn) mn = v;
+      if (mx === null || v > mx) mx = v;
+    }
+    if (p[0] >= fin - 3600 && ref === null) { ref = v; refAge = fin - p[0]; }
+  }
+  const dernier = pts[pts.length - 1][i + 1];
+  const variation = ref !== null && dernier !== null && refAge >= 600 ? (dernier - ref) * 3600 / refAge : null;
+  return { mn, mx, variation };
+}
+
+function rendreBacs() {
+  const zones = zonesAffichees();
+  const conteneur = $("bacs");
+  if (!zones) {
+    conteneur.innerHTML = "";
+    $("air").classList.add("cache");
+    return;
+  }
+  conteneur.innerHTML = "";
+  zones.slice(0, NB_BACS).forEach((z, i) => {
+    const st = statsZone(i);
+    const el = document.createElement("article");
+    el.className = "bac" + (z.al?.length ? " alarme" : "") + (z.actif === false ? " inactif" : "");
+    el.style.setProperty("--c", couleurZone(i));
+
+    const nom = document.createElement("div");
+    nom.className = "nom";
+    nom.textContent = z.nom;
+    if (z.coupe && z.al?.length) {
+      const p = document.createElement("span");
+      p.className = "puce coupe";
+      p.textContent = "son coupé";
+      nom.append(p);
+    }
+
+    const sous = document.createElement("div");
+    sous.className = "sous";
+    if (z.actif === false) sous.textContent = "pas de sonde";
+    else if (z.al?.length) sous.textContent = z.al.map((c) => TEXTE_ALARME[c] || c).join(" · ");
+    else {
+      const morceaux = [];
+      if (st.mn !== null && st.mn !== undefined) morceaux.push(`24 h : ${degres(st.mn)} – ${degres(st.mx)}`);
+      if (st.variation !== null && st.variation !== undefined) {
+        morceaux.push(Math.abs(st.variation) < 0.05 ? "stable" : `${degres(st.variation, true)}/h`);
+      }
+      sous.textContent = morceaux.join("  ·  ") || "mesure en cours";
+    }
+
+    const temp = document.createElement("div");
+    temp.className = "temp" + (z.t === null ? " vide" : "");
+    temp.textContent = degres(z.t);
+    if (z.t !== null) {
+      const u = document.createElement("small");
+      u.textContent = "°C";
+      temp.append(u);
+    }
+    el.append(nom, temp, sous);
+    conteneur.append(el);
+  });
+
+  const air = zones[NB_BACS];
+  if (air) {
+    $("air").classList.remove("cache");
+    $("air").innerHTML = "";
+    const g = document.createElement("span");
+    g.textContent = air.nom + " de la pièce";
+    const d = document.createElement("b");
+    d.textContent = air.t === null ? "--,-" : degres(air.t) + " °C";
+    $("air").append(g, d);
+  } else {
+    $("air").classList.add("cache");
+  }
+}
+
+function rendreEtat() {
+  const pastille = $("pastille");
+  const texte = $("pastilleTexte");
+  const bandeau = $("bandeau");
+  bandeau.className = "bandeau cache";
+  pastille.className = "pastille";
+
+  const bleFrais = ble && ble.mesure && Date.now() - ble.recu < 15000;
+  const zones = zonesAffichees() || [];
+  const enAlarme = zones.some((z) => z.al?.length);
+
+  if (bleFrais) {
+    pastille.classList.add("ble");
+    texte.textContent = "Bluetooth · en direct";
+  } else if (!RELAIS) {
+    pastille.classList.add("erreur");
+    texte.textContent = "relais non réglé";
+    bandeau.textContent = "Mets l'adresse de ton relais Cloudflare dans la ligne RELAIS en haut du script de cette page.";
+    bandeau.className = "bandeau rouge";
+  } else if (relaisErreur && !relais) {
+    pastille.classList.add("erreur");
+    texte.textContent = "relais injoignable";
+    bandeau.textContent = "Le relais Cloudflare ne répond pas. Vérifie ta connexion, ou que le worker centrale-aqua est bien déployé. " +
+      "À côté des bacs, la connexion directe Bluetooth marche quand même.";
+    bandeau.className = "bandeau rouge";
+  } else if (relais?.vide) {
+    pastille.classList.add("attention");
+    texte.textContent = "en attente";
+    bandeau.textContent = "Le relais fonctionne mais la carte n'a encore rien envoyé. Vérifie le wifi dans CentraleAqua.ino.";
+    bandeau.className = "bandeau";
+  } else if (relais) {
+    const age = relais.age + Math.round((Date.now() - relaisRecu) / 1000);
+    if (relais.muette || age > 600) {
+      pastille.classList.add("attention");
+      texte.textContent = "carte muette";
+      bandeau.textContent = `La carte ne donne plus de nouvelles depuis ${depuis(age).replace("il y a ", "")}. ` +
+        `Valeurs de ${heure(relais.maj)} : coupure de courant, wifi ou box ?`;
+      bandeau.className = "bandeau";
+    } else {
+      pastille.classList.add("ok");
+      texte.textContent = depuis(age);
+    }
+    if (relaisErreur) texte.textContent += " · relais injoignable";
+  }
+
+  if (enAlarme && !bandeau.textContent.startsWith("La carte")) {
+    const qui = zones.filter((z) => z.al?.length).map((z) => z.nom).join(", ");
+    bandeau.textContent = `Alarme en cours : ${qui}.`;
+    bandeau.className = "bandeau rouge";
+  }
+
+  // Bouton silence : seulement en direct, s'il y a une alarme qui sonne
+  const sonne = bleFrais && ble.mesure.sonne;
+  $("silenceBouton").classList.toggle("cache", !sonne);
+
+  const vc = ble?.infos?.version || relais?.version;
+  $("versionCarte").textContent = vc ? `carte ${vc}` : "";
+}
+
+// ============================================================================
+//  GRAPHIQUE
+// ============================================================================
+const NS = "http://www.w3.org/2000/svg";
+let geo = null;   // géométrie du dernier tracé, pour le pointeur
+
+function el(nom, attrs, parent) {
+  const e = document.createElementNS(NS, nom);
+  for (const k in attrs) e.setAttribute(k, attrs[k]);
+  if (parent) parent.append(e);
+  return e;
+}
+
+function rendreGraphe() {
+  const svg = $("svg");
+  svg.innerHTML = "";
+  $("legende").innerHTML = "";
+  geo = null;
+  const pts = relais?.histo?.points || [];
+  const noms = relais?.histo?.noms || [];
+  const L = svg.clientWidth || 600, H = svg.clientHeight || 230;
+  svg.setAttribute("viewBox", `0 0 ${L} ${H}`);
+
+  noms.forEach((n, i) => {
+    const s = document.createElement("span");
+    s.style.setProperty("--c", couleurZone(i));
+    s.textContent = n;
+    $("legende").append(s);
+  });
+
+  if (pts.length < 2) {
+    const t = el("text", { x: L / 2, y: H / 2, "text-anchor": "middle" }, svg);
+    t.textContent = RELAIS ? "Pas encore assez de mesures pour une courbe" : "Relais non réglé";
+    return;
+  }
+
+  const fin = pts[pts.length - 1][0];
+  const debut = fin - plageH * 3600;
+  const vus = pts.filter((p) => p[0] >= debut);
+
+  let mn = Infinity, mx = -Infinity;
+  for (const p of vus) for (let i = 1; i < p.length; i++) {
+    const v = p[i];
+    if (v === null || v === undefined) continue;
+    if (v < mn) mn = v;
+    if (v > mx) mx = v;
+  }
+  if (!Number.isFinite(mn)) { mn = 20; mx = 25; }
+  if (mx - mn < 2) { const m = (mx + mn) / 2; mn = m - 1; mx = m + 1; }
+  mn = Math.floor(mn - 0.3); mx = Math.ceil(mx + 0.3);
+
+  const g = { gauche: 34, droite: 8, haut: 8, bas: 22 };
+  const X = (ts) => g.gauche + (ts - debut) / (fin - debut) * (L - g.gauche - g.droite);
+  const Y = (v) => g.haut + (mx - v) / (mx - mn) * (H - g.haut - g.bas);
+  geo = { X, Y, debut, fin, vus, g, L, H };
+
+  // Grille horizontale
+  const pas = mx - mn > 8 ? 2 : (mx - mn > 4 ? 1 : 0.5);
+  for (let v = Math.ceil(mn / pas) * pas; v <= mx + 1e-9; v += pas) {
+    el("line", { x1: g.gauche, x2: L - g.droite, y1: Y(v), y2: Y(v), stroke: "var(--trait)", "stroke-width": 1 }, svg);
+    const t = el("text", { x: g.gauche - 6, y: Y(v) + 4, "text-anchor": "end" }, svg);
+    t.textContent = Number.isInteger(v) ? v : v.toFixed(1).replace(".", ",");
+  }
+  // Seuils d'alarme, s'ils tombent dans la fenêtre
+  for (const s of [relais.seuils?.bas, relais.seuils?.haut]) {
+    if (typeof s === "number" && s > mn && s < mx) {
+      el("line", { x1: g.gauche, x2: L - g.droite, y1: Y(s), y2: Y(s), stroke: "var(--rouge)", "stroke-width": 1, "stroke-dasharray": "4 4", opacity: .7 }, svg);
+    }
+  }
+  // Repères horaires
+  const pasH = plageH <= 6 ? 1 : (plageH <= 24 ? 4 : 8);
+  const d0 = new Date(debut * 1000);
+  d0.setMinutes(0, 0, 0);
+  for (let ts = d0.getTime() / 1000; ts <= fin; ts += 3600) {
+    if (ts < debut) continue;
+    const h = new Date(ts * 1000).getHours();
+    if (h % pasH) continue;
+    el("line", { x1: X(ts), x2: X(ts), y1: g.haut, y2: H - g.bas, stroke: "var(--trait)", "stroke-width": 1, opacity: .6 }, svg);
+    const t = el("text", { x: X(ts), y: H - 6, "text-anchor": "middle" }, svg);
+    t.textContent = `${h}h`;
+  }
+  // Courbes : coupées là où la carte n'a rien envoyé
+  const nbZ = noms.length;
+  for (let i = 0; i < nbZ; i++) {
+    let d = "", prec = null;
+    for (const p of vus) {
+      const v = p[i + 1];
+      if (v === null || v === undefined) { prec = null; continue; }
+      const coupure = !prec || p[0] - prec[0] > 6 * 60;
+      d += `${coupure ? "M" : "L"}${X(p[0]).toFixed(1)},${Y(v).toFixed(1)}`;
+      prec = p;
+    }
+    if (d) el("path", { d, fill: "none", stroke: couleurZone(i), "stroke-width": i >= NB_BACS ? 1.4 : 2, "stroke-linejoin": "round", "stroke-linecap": "round", opacity: i >= NB_BACS ? .75 : 1, "stroke-dasharray": i >= NB_BACS ? "5 4" : "" }, svg);
+  }
+  geo.curseur = el("line", { x1: 0, x2: 0, y1: g.haut, y2: H - g.bas, stroke: "var(--doux)", "stroke-width": 1, visibility: "hidden" }, svg);
+  geo.points = noms.map((_, i) => el("circle", { r: 3.5, fill: couleurZone(i), stroke: "var(--carte)", "stroke-width": 1.5, visibility: "hidden" }, svg));
+  $("infoPointeur").textContent = "";
+}
+
+function pointeur(e) {
+  if (!geo) return;
+  const r = $("svg").getBoundingClientRect();
+  const x = (e.clientX - r.left) * (geo.L / r.width);
+  if (x < geo.g.gauche || x > geo.L - geo.g.droite) return;
+  const ts = geo.debut + (x - geo.g.gauche) / (geo.L - geo.g.gauche - geo.g.droite) * (geo.fin - geo.debut);
+  let meilleur = null;
+  for (const p of geo.vus) if (!meilleur || Math.abs(p[0] - ts) < Math.abs(meilleur[0] - ts)) meilleur = p;
+  if (!meilleur) return;
+  const px = geo.X(meilleur[0]);
+  geo.curseur.setAttribute("x1", px);
+  geo.curseur.setAttribute("x2", px);
+  geo.curseur.setAttribute("visibility", "visible");
+  const noms = relais.histo.noms;
+  const morceaux = [heure(meilleur[0])];
+  geo.points.forEach((c, i) => {
+    const v = meilleur[i + 1];
+    if (v === null || v === undefined) { c.setAttribute("visibility", "hidden"); return; }
+    c.setAttribute("cx", px);
+    c.setAttribute("cy", geo.Y(v));
+    c.setAttribute("visibility", "visible");
+    morceaux.push(`${noms[i]} ${degres(v)}`);
+  });
+  $("infoPointeur").textContent = morceaux.join("  ·  ");
+}
+
+$("svg").addEventListener("pointermove", pointeur);
+$("svg").addEventListener("pointerdown", pointeur);
+
+document.querySelectorAll(".plages button").forEach((b) => {
+  b.addEventListener("click", () => {
+    plageH = Number(b.dataset.h);
+    document.querySelectorAll(".plages button").forEach((x) => x.setAttribute("aria-pressed", String(x === b)));
+    rendreGraphe();
+  });
+});
+
+let attenteRedim = null;
+window.addEventListener("resize", () => {
+  clearTimeout(attenteRedim);
+  attenteRedim = setTimeout(rendreGraphe, 150);
+});
+
+// ============================================================================
+//  RELAIS
+// ============================================================================
+async function chargerRelais() {
+  if (!RELAIS) { rendreTout(); return; }
+  try {
+    const r = await fetch(RELAIS + "/etat", { cache: "no-store" });
+    if (!r.ok) throw new Error("HTTP " + r.status);
+    const j = await r.json();
+    if (!j.ok) throw new Error(j.erreur || "réponse invalide");
+    relais = j;
+    relaisRecu = Date.now();
+    relaisErreur = null;
+  } catch (e) {
+    relaisErreur = e.message || String(e);
+  }
+  rendreTout();
+}
+
+function rendreTout() {
+  rendreBacs();
+  rendreEtat();
+  rendreGraphe();
+}
+
+// ============================================================================
+//  BLUETOOTH (Web Bluetooth : Chrome Android, Chrome/Edge PC)
+// ============================================================================
+function decoderMesures(vue) {
+  // octet 0 : version, 1 : nombre de zones, 2 : drapeaux généraux
+  // puis 4 octets par zone : température (centièmes, int16), alarmes, drapeaux
+  if (vue.byteLength < 3 || vue.getUint8(0) !== 1) return null;
+  const n = vue.getUint8(1), g = vue.getUint8(2);
+  const zones = [];
+  for (let i = 0; i < n && 3 + i * 4 + 4 <= vue.byteLength; i++) {
+    const o = 3 + i * 4;
+    const t = vue.getInt16(o, true), a = vue.getUint8(o + 2), f = vue.getUint8(o + 3);
+    zones.push({
+      t: t === -32768 ? null : t / 100,
+      actif: !!(f & 1),
+      coupe: !!(f & 2),
+      al: BITS_ALARME.filter(([, b]) => a & b).map(([c]) => c),
+    });
+  }
+  return { zones, pause: !!(g & 1), sonne: !!(g & 2), wifi: !!(g & 4), relaisOk: !!(g & 8) };
+}
+
+function majTexteBle(txt) {
+  $("bleTexte").textContent = txt;
+}
+
+async function connecterBle() {
+  if (ble?.appareil?.gatt?.connected) {
+    ble.manuel = true;
+    ble.appareil.gatt.disconnect();
+    return;
+  }
+  try {
+    const appareil = ble?.appareil || await navigator.bluetooth.requestDevice({
+      filters: [{ services: [BLE_SERVICE] }, { name: BLE_NOM }],
+      optionalServices: [BLE_SERVICE],
+    });
+    ble = { appareil, recu: 0, manuel: false, essais: 0 };
+    appareil.addEventListener("gattserverdisconnected", deconnecteBle);
+    await brancherBle();
+  } catch (e) {
+    if (e.name !== "NotFoundError") majTexteBle("Connexion impossible : " + (e.message || e));
+    $("bleBouton").textContent = "Connexion directe";
+  }
+}
+
+async function brancherBle() {
+  majTexteBle("Connexion à la carte…");
+  $("bleBouton").disabled = true;
+  try {
+    const serveur = await ble.appareil.gatt.connect();
+    const service = await serveur.getPrimaryService(BLE_SERVICE);
+    const infos = await service.getCharacteristic(BLE_INFOS);
+    try { ble.infos = JSON.parse(new TextDecoder().decode(await infos.readValue())); } catch (e) { ble.infos = {}; }
+    ble.commande = await service.getCharacteristic(BLE_COMMANDE);
+    const mesures = await service.getCharacteristic(BLE_MESURES);
+    mesures.addEventListener("characteristicvaluechanged", (ev) => {
+      const m = decoderMesures(ev.target.value);
+      if (m) { ble.mesure = m; ble.recu = Date.now(); rendreBacs(); rendreEtat(); }
+    });
+    await mesures.startNotifications();
+    const m = decoderMesures(await mesures.readValue());
+    if (m) { ble.mesure = m; ble.recu = Date.now(); }
+    ble.essais = 0;
+    majTexteBle("Connecté en direct à la carte. Les valeurs se mettent à jour toutes les 2 secondes.");
+    $("bleBouton").textContent = "Déconnecter";
+    $("bleBouton").classList.add("secondaire");
+  } catch (e) {
+    majTexteBle("Connexion impossible : " + (e.message || e) + ". Rapproche-toi de la carte et réessaie.");
+    $("bleBouton").textContent = "Connexion directe";
+    $("bleBouton").classList.remove("secondaire");
+  }
+  $("bleBouton").disabled = false;
+  rendreTout();
+}
+
+function deconnecteBle() {
+  if (!ble) return;
+  ble.mesure = null;
+  $("bleBouton").textContent = "Connexion directe";
+  $("bleBouton").classList.remove("secondaire");
+  rendreTout();
+  if (ble.manuel) {
+    majTexteBle("Déconnecté. Retour aux valeurs du relais.");
+    ble = null;
+    return;
+  }
+  // Perte de liaison (trop loin, carte redémarrée) : quelques nouvelles tentatives
+  if (ble.essais < 3) {
+    ble.essais++;
+    majTexteBle(`Liaison perdue, nouvelle tentative (${ble.essais}/3)…`);
+    setTimeout(() => { if (ble) brancherBle(); }, 3000);
+  } else {
+    majTexteBle("Liaison perdue. Retour aux valeurs du relais.");
+    ble = null;
+  }
+}
+
+async function couperSon() {
+  try {
+    await ble.commande.writeValue(new Uint8Array([1]));
+    majTexteBle("Son coupé. L'alarme reste affichée tant que le problème est là.");
+  } catch (e) {
+    majTexteBle("Impossible de couper le son : " + (e.message || e));
+  }
+}
+
+if (navigator.bluetooth) {
+  $("bleBouton").addEventListener("click", connecterBle);
+  $("silenceBouton").addEventListener("click", couperSon);
+} else {
+  $("bleBouton").disabled = true;
+  majTexteBle("Ce navigateur ne gère pas le Bluetooth direct. Ouvre la page dans Chrome sur Android ou sur PC.");
+}
+
+// ============================================================================
+//  DÉMARRAGE
+// ============================================================================
+chargerRelais();
+setInterval(chargerRelais, RAFRAICHIR_S * 1000);
+setInterval(rendreEtat, 15000);   // l'âge des mesures avance même sans nouvelle réponse
+document.addEventListener("visibilitychange", () => { if (!document.hidden) chargerRelais(); });
+</script>
+</body>
+</html>
